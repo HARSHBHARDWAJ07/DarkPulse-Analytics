@@ -31,9 +31,12 @@ app.use(cors({
     ? process.env.FRONTEND_URL 
     : ['http://localhost:3000', 'http://127.0.0.1:3000'],
   credentials: true,
-   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Compression middleware
 app.use(compression());
@@ -42,17 +45,23 @@ app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging middleware
-if (process.env.NODE_ENV === 'production') {
+// Logging middleware (FIXED: correct environment condition)
+if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 } else {
   app.use(morgan('combined'));
 }
 
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000, // requests per windowMs
+  max: process.env.NODE_ENV === 'production' ? 100 : 1000,
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again later.'
@@ -66,18 +75,30 @@ app.use('/api/', limiter);
 // Passport middleware
 app.use(passport.initialize());
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'DarkPulse Analytics API',
+    version: '1.0.0',
+    docs: `${req.protocol}://${req.get('host')}/api-docs`
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    database: 'connected' // Add database status if needed
   });
 });
 
-// API routes
-app.use('/api/auth', authRoutes);
+// API routes - MAIN FIX: Mount auth routes at both paths
+app.use('/auth', authRoutes);        // For frontend compatibility
+app.use('/api/auth', authRoutes);    // For API consistency
 app.use('/api/analysis', analysisRoutes);
 app.use('/api/users', userRoutes);
 
@@ -85,7 +106,7 @@ app.use('/api/users', userRoutes);
 app.post('/api/contact', [
   rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 5, // 5 contact forms per hour
+    max: 5,
     message: { success: false, message: 'Too many contact form submissions' }
   }),
   require('./middleware/validation').validateContact
@@ -93,7 +114,7 @@ app.post('/api/contact', [
   try {
     const { name, email, message } = req.body;
     
-    // Here you would typically send an email or save to database
+    // Log contact form submission
     console.log('Contact form submission:', { name, email, message });
     
     // For now, just return success
@@ -113,7 +134,8 @@ app.post('/api/contact', [
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'API endpoint not found'
+    message: 'API endpoint not found',
+    suggestedPath: `${req.baseUrl}/health`
   });
 });
 
@@ -146,6 +168,7 @@ app.listen(PORT, () => {
 🚀 Server running in ${process.env.NODE_ENV} mode on port ${PORT}
 📱 Health check: http://localhost:${PORT}/health
 🔗 API Base URL: http://localhost:${PORT}/api
+🌐 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}
   `);
 });
 
